@@ -1,0 +1,1533 @@
+---
+title: "Thyroid Cancer Recurrence"
+author: "Axelle MERIC"
+date: "Academic Year 2025-2026"
+output:
+  html_document:
+    self_contained: true
+    math_method: 
+      engine: mathjax
+      url: https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js
+    code_folding: hide
+    css: ./style.css
+    df_print: paged
+    highlight: tango
+    number_sections: no
+    theme: flatly
+    toc: yes
+    toc_float:
+      collapsed: no
+---
+
+```{r setup, include=FALSE}
+
+knitr::opts_chunk$set(
+	fig.align = "center",
+	message = FALSE,
+	warning = FALSE,
+	results = "markup"
+)
+
+```
+
+# Preliminary
+
+We begin by loading the necessary packages for this analysis. We precise that the code of this project has been commented when it was thought needed, for example when introducing new functions.
+
+```{r Librairies, warning=FALSE}
+
+library(tidyverse)
+library(rsample)
+library(scales)
+library(dplyr)
+library(tidyr)
+library(glue)
+library(corrplot)
+library(ggfortify)
+library(carData)
+library(car)
+library(MASS)
+library(ggplot2)
+library(DataExplorer)
+library(skimr)
+library(plotly)
+library(gridExtra)
+library(grid)
+library(rlang)
+library(caret)
+library(rcompanion) #cramerV 
+library(reshape2)
+library(class)
+library(ROCR)
+library(randomForest)
+
+```
+
+# 1. Introduction 
+
+The aim of this project is to study Thyroid Cancer Recurrence given medical information of the patient. This project of data visualisation is based on a previous project done in statistical learning course of Master 1. It was done in Python and we will use some of the developed model to focus here on the visualisation part.
+
+## 1.1. Dataset Presentation 
+
+In this project we use the following dataset. 
+
+```{r Data import}
+
+data <- read_csv("Thyroid_Diff.csv")
+head(data, 10)
+summary(data)
+
+```
+
+It consists of 383 patients who had previously had thyroid cancer. 
+
+```{r dimensions}
+
+cat("Rows:", nrow(data), "\n")
+cat("Columns:", ncol(data), "\n")
+
+```
+
+There is exactly one continuous feature, which is `Age`. The 15 other features are categorical ones. The target variable is `Recurred`, which indicates whether or not the cancer recurred for each patient. The problem can be formulated as a supervised binary classification task, where the goal is to predict the recurrence of thyroid cancer using a set of clinical and pathological features.
+
+```{r Features}
+
+skimr::skim(data)  |> rmarkdown::paged_table()
+
+```
+
+As observe in the summary and the first lines of the dataset, we begin by changing the type of the categorical features from character to factor. And we also correct the name of one of the feature.
+
+```{r data shaping}
+
+data <- data |> 
+  rename_with(~ sub("Radiothreapy", "Radiotherapy", .x)) |>
+  mutate(Gender = as.factor(Gender),
+         Smoking = as.factor(Smoking),
+         `Hx Smoking` = as.factor(`Hx Smoking`),
+         `Hx Radiotherapy` = as.factor(`Hx Radiotherapy`),
+         `Thyroid Function` = as.factor(`Thyroid Function`),
+         `Physical Examination` = as.factor(`Physical Examination`),
+         Adenopathy = as.factor(Adenopathy),
+         Pathology = as.factor(Pathology),
+         Focality = as.factor(Focality),
+         Risk = as.factor(Risk),
+         T = as.factor(T),
+         N = as.factor(N),
+         M = as.factor(M),
+         Stage = as.factor(Stage),
+         Response = as.factor(Response),
+         Recurred = as.factor(Recurred)
+  ) 
+
+head(data, 10) |> rmarkdown::paged_table()
+
+```
+
+
+## 1.2. Features analysis
+
+Before building any model, the first step is to explore the features and understand the structure of the dataset. In this section, we conduct a variable analysis to get an overview of the main features
+and their behavior.
+
+### 1.2.1. Target variable
+
+We begin our study with the target variable `Recurred` which has two modalities: `Yes` and `No`. Knowing that the patient previously had cancer, it takes the value `Yes` if the cancer recurred after initial treatment and `No` otherwise.
+
+```{r traget definition}
+
+target <- data$Recurred
+
+unique(target) #return the factors of a categorical feature
+
+```
+
+ One can see first with a `summary()` and also in the distribution that the distribuion is unbalanced. 
+
+```{r target summary}
+
+summary(target)
+
+```
+
+```{r target distribution}
+
+tar_dist_plot <- ggplot(data, aes(x = Recurred, fill = Recurred)) + #structure of the plot
+  geom_bar() + #draw the two bars
+  geom_text(stat='count', aes(label=..count..)) + #add the number on each bar
+  theme_minimal() +
+  scale_fill_manual(values = c("No" = "#983399", "Yes" = "#E4CBF9")) + #associate my colour
+  labs(title = "Distribution of the taret variable: Recurrence",
+       x = "Recurrence Status",
+       y = "Number of Patients",
+       fill = "Recurred") #print the title
+
+ggplotly(tar_dist_plot) #we choose an interactive plot 
+
+```
+
+### 1.2.2. Analysis of ofother relevant features
+
+Now, let us look at the only numerical feature: `Age`.It ranges from 15 to 82. The mean (40.87) is slightly higher that the median (37.00).
+
+```{r age summary}
+
+summary(data$Age)
+
+```
+
+It is consistent with the peak of values that we observe around the age 31 in the two following figures. The first one shows the general distribution of the feature and the second one breaks it down by recurrence status.
+
+```{r age distribution}
+
+age_dist <- ggplot(data, aes(x = Age)) +
+  geom_histogram(aes(y = ..density..), binwidth = 1, fill = "#E4CBF9", color = "white", lwd = 0.1,  alpha = 0.8) + #draw the histogram
+  geom_line(stat = "density", color = "#983399", size = 1) + #draw the mean line = the density
+  theme_minimal() +
+  labs(title = "Age distribution", x = "Age", y = "Densité")
+  
+ggplotly(age_dist)
+
+```
+
+```{r age distribution by modality}
+
+age_dist_mod <- ggplot(data, aes(x = Age, fill = Recurred)) +
+  geom_histogram(bins = 30, position = "stack", color = "white", alpha = 0.8) +
+  scale_fill_manual(values = c("No" = "#983399", "Yes" = "#E4CBF9")) +
+  theme_minimal() +
+  labs(title = 'Age Distribution by Recurrence Status',
+       x = 'Age', y = 'Count')
+  
+ggplotly(age_dist_mod)
+
+```
+
+Furthermore, as we draw the boxplots for the two modalities, we observe a larger interquantile range for the recurrent case. It can be partly explained by the fact that there are less values so it is less precise and it also indicates a greater variability in the age profile of patients who relapse.
+The black diamond represents the mean. The mean of the recurrent modality is higher than the mean of the other modality. This trend is confirmed by the median represented by the horizontal line in the boxplot, which is clearly elevated for the `Yes` group compared to the `No` group, suggesting that an advanced age is a significant risk factor for cancer recurrence. 
+Finally, we can observe distinct outliers in the `No` group, representing older patients who, despite their age, did not experience recurrence.
+
+```{r age boxplot}
+  
+age_boxplot <- ggplot(data, aes(y=Age , x= Recurred ,colour=Recurred ,fill= Recurred))+
+  geom_boxplot(alpha=0.8, outlier.alpha=0)+
+  geom_jitter(width=0.25,size=1)+ #plot the points 
+  scale_fill_manual(values = c("No" = "#983399", "Yes"    = "#E4CBF9") ) + #colour for the border of the boxplot
+  scale_colour_manual(values = c( "No" = "#983399", "Yes" = "#E4CBF9" ))+ #colour for the inside of the boxplot
+  stat_summary(fun=mean, colour="black", geom="point",shape=18, size=3)+ #black diamonds for the mean 
+  theme_minimal() +
+  labs(title = "Age Distribution vs Recurrence Target",
+       x = "Recurrence Status", y = "Age (Years)",      
+       fill = "Recurred", colour = "Recurred")
+
+ggplotly(age_boxplot)
+
+```
+
+For all other features, the categorical ones, we print the following plots: a distribution among the recurrence status and a table with the precise number and percentage in each couple of modalities. 
+To do so, we define a list with all the different categorical features and we implement a loop on them. Here is the code for the loop. After it will be used for the most relevant features to be visually analysed by adding `col <- "Feature"` before the code.
+
+```{r loop feature eval, fig.width=14, fig.height=6, eval=FALSE}
+
+#First, we define all the features we need to put in the loop
+cat_var_names <- data |>
+  select(-Recurred, -Age) |>
+  names() #Return the name instead of a dataframe 
+
+#Then, we plot the graph for every one of them 
+for (col in cat_var_names) {
+  
+  #Preparation for the barplot
+  plot_data <- data |>
+    group_by(.data[[col]], Recurred) |>  #Group by the modalities of Recurred
+    summarise(count = n(), .groups = "drop") |> #we count by modalities of Recurred to build the plot after
+    group_by(.data[[col]]) |>#Group by the modalities of the chosen column
+    mutate(total = sum(count)) #We add a new column for the sum
+  
+  #computation of the totals 
+  total_data <- data |>
+    group_by(.data[[col]]) |> 
+    summarise(total = n(), .groups = "drop") #Count by couple (col,Recurred) and drop to not 
+  
+  #Creation of the barplot 
+  p_bar <- ggplot( plot_data, aes(x = .data[[col]], y = count, fill = Recurred)) +
+    geom_bar( stat = "identity", width = 0.8) +
+    geom_text(aes(label = count), #To print the total by couple
+              position = position_stack(vjust = 0.5), 
+              fontface = "bold", color = "black", size = 3.5) +
+    geom_text(data = total_data, #To print the total by modality 
+              aes(x = .data[[col]], y = total, label = paste("Total:", total)),
+              vjust = -0.5, fontface = "bold", size = 3.5, inherit.aes = FALSE) +
+    scale_fill_manual(values = c("No" = "#983399", "Yes"    = "#E4CBF9")) +
+    scale_y_continuous(expand = expansion(mult = c(0, 0.15))) +
+    theme_minimal() +
+    labs(title = paste("Distribution of", col, "by Recurrence Status"),
+         x = col,
+         y = "Number of Patients",
+         fill = "Recurrence Status") +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1)) #to tilt the names of the modalities
+  
+  
+  #Preparation of the table
+  table_df <- data |>
+    count(.data[[col]], Recurred) |> #Group col by modality of recurred
+    group_by(.data[[col]]) |> #Then group by modality of col
+    mutate(pct = n / sum(n) * 100) |> #create a pourcentage
+    ungroup() |> #undo the last grouping
+    mutate(label = sprintf("%d (%.1f%%)", n, pct)) |> #new var that will be in the table under the form number N then ( then float R then %)
+    select(-n, -pct) |> #erase the column we do not need
+    pivot_wider(names_from = Recurred, values_from = label, values_fill = "0 (0.0%)") |> #pivote horinzontlly
+    left_join(total_data, by = col) |> #add the column in a nice way
+    rename(Category = 1, Total = total) #rename the first and last columns
+  
+  # Style of the table
+  tt <- ttheme_default(
+    core = list( bg_params = list(fill = c("white"), col = "black", lwd = 1), 
+                 fg_params = list(fontsize = 9)
+    ), #Set up of the inside of the table
+    colhead = list( bg_params = list(fill = "#E6E6E6", col = "black", lwd = 1), 
+                    fg_params = list(fontsize = 8, fontface = "bold")
+    ) #setup of the title colmun
+  )
+  
+  #Use of function of the package gridExtra to make it look pretty
+  p_table <- tableGrob(table_df, rows = NULL, theme = tt)
+  title_grob <- textGrob("Detailed Percentages", gp = gpar(fontsize = 12, fontface = "bold"))
+  p_table_with_title <- arrangeGrob(title_grob, p_table, heights = c(0.1, 0.9))
+  
+  #We print the two plot side by side
+  grid.arrange(p_bar, p_table_with_title, ncol = 2, widths = c(2, 1))
+  
+  cat("\n\n") 
+}
+```
+
+Let us first have a look at the feature `Response`. In this plot, one can see that on one hand, a patient which `Response` was `Excellent` will almost surely not have a recurrent cancer (99.5%). Whereas on the other hand, a patient which `Response` was `Structural Incomplete` will almost surely have a recurrent cancer (98.7%). For the other two modalities, it is not as much telling, but we can conjecture that this feature will help with the classification.
+
+```{r Response, fig.width=14, fig.height=6}
+col <- "Response"
+  
+  #Preparation for the barplot
+  plot_data <- data |>
+    group_by(.data[[col]], Recurred) |>  #Group by the modalities of Recurred
+    summarise(count = n(), .groups = "drop") |> #we count by modalities of Recurred to build the plot after
+    group_by(.data[[col]]) |>#Group by the modalities of the chosen column
+    mutate(total = sum(count)) #We add a new column for the sum
+  
+  #computation of the totals 
+  total_data <- data |>
+    group_by(.data[[col]]) |> 
+    summarise(total = n(), .groups = "drop") #Count by couple (col,Recurred) and drop to not 
+  
+  #Creation of the barplot 
+  p_bar <- ggplot( plot_data, aes(x = .data[[col]], y = count, fill = Recurred)) +
+    geom_bar( stat = "identity", width = 0.8) +
+    geom_text(aes(label = count), #To print the total by couple
+              position = position_stack(vjust = 0.5), 
+              fontface = "bold", color = "black", size = 3.5) +
+    geom_text(data = total_data, #To print the total by modality 
+              aes(x = .data[[col]], y = total, label = paste("Total:", total)),
+              vjust = -0.5, fontface = "bold", size = 3.5, inherit.aes = FALSE) +
+    scale_fill_manual(values = c("No" = "#983399", "Yes"    = "#E4CBF9")) +
+    scale_y_continuous(expand = expansion(mult = c(0, 0.15))) +
+    theme_minimal() +
+    labs(title = paste("Distribution of", col, "by Recurrence Status"),
+         x = col,
+         y = "Number of Patients",
+         fill = "Recurrence Status") +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1)) #to tilt the names of the modalities
+  
+  
+  #Preparation of the table
+  table_df <- data |>
+    count(.data[[col]], Recurred) |> #Group col by modality of recurred
+    group_by(.data[[col]]) |> #Then group by modality of col
+    mutate(pct = n / sum(n) * 100) |> #create a pourcentage
+    ungroup() |> #undo the last grouping
+    mutate(label = sprintf("%d (%.1f%%)", n, pct)) |> #new var that will be in the table under the form number N then ( then float R then %)
+    select(-n, -pct) |> #erase the column we do not need
+    pivot_wider(names_from = Recurred, values_from = label, values_fill = "0 (0.0%)") |> #pivote horinzontlly
+    left_join(total_data, by = col) |> #add the column in a nice way
+    rename(Category = 1, Total = total) #rename the first and last columns
+  
+  # Style of the table
+  tt <- ttheme_default(
+    core = list( bg_params = list(fill = c("white"), col = "black", lwd = 1), 
+                 fg_params = list(fontsize = 9)
+    ), #Set up of the inside of the table
+    colhead = list( bg_params = list(fill = "#E6E6E6", col = "black", lwd = 1), 
+                    fg_params = list(fontsize = 8, fontface = "bold")
+    ) #setup of the title colmun
+  )
+  
+  #Use of function of the package gridExtra to make it look pretty
+  p_table <- tableGrob(table_df, rows = NULL, theme = tt)
+  title_grob <- textGrob("Detailed Percentages", gp = gpar(fontsize = 12, fontface = "bold"))
+  p_table_with_title <- arrangeGrob(title_grob, p_table, heights = c(0.1, 0.9))
+  
+  #We print the two plot side by side
+  grid.arrange(p_bar, p_table_with_title, ncol = 2, widths = c(2, 1))
+  
+  cat("\n\n") 
+  
+```
+
+The plot of the feature `T` leads to the same assumption. This feature reflects tumor size, with categories on the left indicating less severe stages and those on the right representing more advanced and more severe stages. With type 1 and 2, the chances of reccurence are very low, almost null for Type 1A. Whereas, for other types, the recurrence occurs more often. For the type 4 (A and B) there are not as much values as for the other types. It is explained by the fact that with such cancer the survival chances at the first ocurrence are not propable. Furthermore, this dataset does not contain data of a person who had type 3a and did not have a recurrence.
+
+```{r T, fig.width=14, fig.height=6}
+
+col <- "T"
+  
+  #Preparation for the barplot
+  plot_data <- data |>
+    group_by(.data[[col]], Recurred) |>  #Group by the modalities of Recurred
+    summarise(count = n(), .groups = "drop") |> #we count by modalities of Recurred to build the plot after
+    group_by(.data[[col]]) |>#Group by the modalities of the chosen column
+    mutate(total = sum(count)) #We add a new column for the sum
+  
+  #computation of the totals 
+  total_data <- data |>
+    group_by(.data[[col]]) |> 
+    summarise(total = n(), .groups = "drop") #Count by couple (col,Recurred) and drop to not 
+  
+  #Creation of the barplot 
+  p_bar <- ggplot( plot_data, aes(x = .data[[col]], y = count, fill = Recurred)) +
+    geom_bar( stat = "identity", width = 0.8) +
+    geom_text(aes(label = count), #To print the total by couple
+              position = position_stack(vjust = 0.5), 
+              fontface = "bold", color = "black", size = 3.5) +
+    geom_text(data = total_data, #To print the total by modality 
+              aes(x = .data[[col]], y = total, label = paste("Total:", total)),
+              vjust = -0.5, fontface = "bold", size = 3.5, inherit.aes = FALSE) +
+    scale_fill_manual(values = c("No" = "#983399", "Yes"    = "#E4CBF9")) +
+    scale_y_continuous(expand = expansion(mult = c(0, 0.15))) +
+    theme_minimal() +
+    labs(title = paste("Distribution of", col, "by Recurrence Status"),
+         x = col,
+         y = "Number of Patients",
+         fill = "Recurrence Status") 
+    #theme(axis.text.x = element_text(angle = 45, hjust = 1)) #to tilt the names of the modalities
+  
+  
+  #Preparation of the table
+  table_df <- data |>
+    count(.data[[col]], Recurred) |> #Group col by modality of recurred
+    group_by(.data[[col]]) |> #Then group by modality of col
+    mutate(pct = n / sum(n) * 100) |> #create a pourcentage
+    ungroup() |> #undo the last grouping
+    mutate(label = sprintf("%d (%.1f%%)", n, pct)) |> #new var that will be in the table under the form number N then ( then float R then %)
+    select(-n, -pct) |> #erase the column we do not need
+    pivot_wider(names_from = Recurred, values_from = label, values_fill = "0 (0.0%)") |> #pivote horinzontlly
+    left_join(total_data, by = col) |> #add the column in a nice way
+    rename(Category = 1, Total = total) #rename the first and last columns
+  
+  # Style of the table
+  tt <- ttheme_default(
+    core = list( bg_params = list(fill = c("white"), col = "black", lwd = 1), 
+                 fg_params = list(fontsize = 9)
+    ), #Set up of the inside of the table
+    colhead = list( bg_params = list(fill = "#E6E6E6", col = "black", lwd = 1), 
+                    fg_params = list(fontsize = 8, fontface = "bold")
+    ) #setup of the title colmun
+  )
+  
+  #Use of function of the package gridExtra to make it look pretty
+  p_table <- tableGrob(table_df, rows = NULL, theme = tt)
+  title_grob <- textGrob("Detailed Percentages", gp = gpar(fontsize = 12, fontface = "bold"))
+  p_table_with_title <- arrangeGrob(title_grob, p_table, heights = c(0.1, 0.9))
+  
+  #We print the two plot side by side
+  grid.arrange(p_bar, p_table_with_title, ncol = 2, widths = c(2, 1))
+  
+  cat("\n\n") 
+
+```
+
+Once again, for the feature `Stage`, there are no data of patient having type III or IV and not having a reccurence. One could assume that this two features `T` and `Stage` are correlated as their interpretation and numbers are very similar. 
+
+```{r Stage, fig.width=14, fig.height=6}
+
+col <- "Stage"
+  
+  #Preparation for the barplot
+  plot_data <- data |>
+    group_by(.data[[col]], Recurred) |>  #Group by the modalities of Recurred
+    summarise(count = n(), .groups = "drop") |> #we count by modalities of Recurred to build the plot after
+    group_by(.data[[col]]) |>#Group by the modalities of the chosen column
+    mutate(total = sum(count)) #We add a new column for the sum
+  
+  #computation of the totals 
+  total_data <- data |>
+    group_by(.data[[col]]) |> 
+    summarise(total = n(), .groups = "drop") #Count by couple (col,Recurred) and drop to not 
+  
+  #Creation of the barplot 
+  p_bar <- ggplot( plot_data, aes(x = .data[[col]], y = count, fill = Recurred)) +
+    geom_bar( stat = "identity", width = 0.8) +
+    geom_text(aes(label = count), #To print the total by couple
+              position = position_stack(vjust = 0.5), 
+              fontface = "bold", color = "black", size = 3.5) +
+    geom_text(data = total_data, #To print the total by modality 
+              aes(x = .data[[col]], y = total, label = paste("Total:", total)),
+              vjust = -0.5, fontface = "bold", size = 3.5, inherit.aes = FALSE) +
+    scale_fill_manual(values = c("No" = "#983399", "Yes"    = "#E4CBF9")) +
+    scale_y_continuous(expand = expansion(mult = c(0, 0.15))) +
+    theme_minimal() +
+    labs(title = paste("Distribution of", col, "by Recurrence Status"),
+         x = col,
+         y = "Number of Patients",
+         fill = "Recurrence Status") +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1)) #to tilt the names of the modalities
+  
+  
+  #Preparation of the table
+  table_df <- data |>
+    count(.data[[col]], Recurred) |> #Group col by modality of recurred
+    group_by(.data[[col]]) |> #Then group by modality of col
+    mutate(pct = n / sum(n) * 100) |> #create a pourcentage
+    ungroup() |> #undo the last grouping
+    mutate(label = sprintf("%d (%.1f%%)", n, pct)) |> #new var that will be in the table under the form number N then ( then float R then %)
+    select(-n, -pct) |> #erase the column we do not need
+    pivot_wider(names_from = Recurred, values_from = label, values_fill = "0 (0.0%)") |> #pivote horinzontlly
+    left_join(total_data, by = col) |> #add the column in a nice way
+    rename(Category = 1, Total = total) #rename the first and last columns
+  
+  # Style of the table
+  tt <- ttheme_default(
+    core = list( bg_params = list(fill = c("white"), col = "black", lwd = 1), 
+                 fg_params = list(fontsize = 9)
+    ), #Set up of the inside of the table
+    colhead = list( bg_params = list(fill = "#E6E6E6", col = "black", lwd = 1), 
+                    fg_params = list(fontsize = 8, fontface = "bold")
+    ) #setup of the title colmun
+  )
+  
+  #Use of function of the package gridExtra to make it look pretty
+  p_table <- tableGrob(table_df, rows = NULL, theme = tt)
+  title_grob <- textGrob("Detailed Percentages", gp = gpar(fontsize = 12, fontface = "bold"))
+  p_table_with_title <- arrangeGrob(title_grob, p_table, heights = c(0.1, 0.9))
+  
+  #We print the two plot side by side
+  grid.arrange(p_bar, p_table_with_title, ncol = 2, widths = c(2, 1))
+  
+  cat("\n\n") 
+
+```
+
+Here is an other example, but with a different interpretation. In this case we do not observe modalities with a clear link like we saw for the feature `Response`. However, one can still conclude that more Female had a first Thyroid cancer. And that in percent, women tend to have less recurrence than men: only 21.2%. for female against 59.2% for male. This is why it is important to draw the table with percentage, as one could be misled by the numbers alone. We cannot assume anything clearly from this feature at this point and will wait for the model to show if the gender has a role in the recurrence.
+
+```{r Gender, fig.width=14, fig.height=6}
+
+col <- "Gender"
+  
+  #Preparation for the barplot
+  plot_data <- data |>
+    group_by(.data[[col]], Recurred) |>  #Group by the modalities of Recurred
+    summarise(count = n(), .groups = "drop") |> #we count by modalities of Recurred to build the plot after
+    group_by(.data[[col]]) |>#Group by the modalities of the chosen column
+    mutate(total = sum(count)) #We add a new column for the sum
+  
+  #computation of the totals 
+  total_data <- data |>
+    group_by(.data[[col]]) |> 
+    summarise(total = n(), .groups = "drop") #Count by couple (col,Recurred) and drop to not 
+  
+  #Creation of the barplot 
+  p_bar <- ggplot( plot_data, aes(x = .data[[col]], y = count, fill = Recurred)) +
+    geom_bar( stat = "identity", width = 0.8) +
+    geom_text(aes(label = count), #To print the total by couple
+              position = position_stack(vjust = 0.5), 
+              fontface = "bold", color = "black", size = 3.5) +
+    geom_text(data = total_data, #To print the total by modality 
+              aes(x = .data[[col]], y = total, label = paste("Total:", total)),
+              vjust = -0.5, fontface = "bold", size = 3.5, inherit.aes = FALSE) +
+    scale_fill_manual(values = c("No" = "#983399", "Yes"    = "#E4CBF9")) +
+    scale_y_continuous(expand = expansion(mult = c(0, 0.15))) +
+    theme_minimal() +
+    labs(title = paste("Distribution of", col, "by Recurrence Status"),
+         x = col,
+         y = "Number of Patients",
+         fill = "Recurrence Status") 
+    #theme(axis.text.x = element_text(angle = 45, hjust = 1)) #to tilt the names of the modalities
+  
+  
+  #Preparation of the table
+  table_df <- data |>
+    count(.data[[col]], Recurred) |> #Group col by modality of recurred
+    group_by(.data[[col]]) |> #Then group by modality of col
+    mutate(pct = n / sum(n) * 100) |> #create a pourcentage
+    ungroup() |> #undo the last grouping
+    mutate(label = sprintf("%d (%.1f%%)", n, pct)) |> #new var that will be in the table under the form number N then ( then float R then %)
+    select(-n, -pct) |> #erase the column we do not need
+    pivot_wider(names_from = Recurred, values_from = label, values_fill = "0 (0.0%)") |> #pivote horinzontlly
+    left_join(total_data, by = col) |> #add the column in a nice way
+    rename(Category = 1, Total = total) #rename the first and last columns
+  
+  # Style of the table
+  tt <- ttheme_default(
+    core = list( bg_params = list(fill = c("white"), col = "black", lwd = 1), 
+                 fg_params = list(fontsize = 9)
+    ), #Set up of the inside of the table
+    colhead = list( bg_params = list(fill = "#E6E6E6", col = "black", lwd = 1), 
+                    fg_params = list(fontsize = 8, fontface = "bold")
+    ) #setup of the title colmun
+  )
+  
+  #Use of function of the package gridExtra to make it look pretty
+  p_table <- tableGrob(table_df, rows = NULL, theme = tt)
+  title_grob <- textGrob("Detailed Percentages", gp = gpar(fontsize = 12, fontface = "bold"))
+  p_table_with_title <- arrangeGrob(title_grob, p_table, heights = c(0.1, 0.9))
+  
+  #We print the two plot side by side
+  grid.arrange(p_bar, p_table_with_title, ncol = 2, widths = c(2, 1))
+  
+  cat("\n\n") 
+ 
+```
+
+One could also introduce an another figure which prints the barplot but a scaled version of it. Each bar has the same height and is broken down by percentage.
+
+```{r loop pourcentage version, eval=FALSE}
+
+for (col in cat_var_names) {
+
+  pourcent_plot <- ggplot(data, aes(x = .data[[col]], fill = Recurred)) +
+    geom_bar(position = "fill", width = 0.7) + #position = "fill" to give them this height
+    scale_y_continuous(labels = scales::percent) + #y axis in pourcent 
+    scale_fill_manual(values = c("No" = "#983399", "Yes" = "#E4CBF9")) +
+    theme_minimal() +    
+    labs(title = paste("Proportion of Recurrence by", col),
+         x = col,
+         y = "Proportion (%)",
+         fill = "Recurred Status") +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+  print(pourcent_plot)
+}
+
+```
+
+Here is a relevant example for the feature `Gender`. In this version, on can directly observe that male have higher chances at thyroid cancer recurrence.
+
+```{r Gender with proportions}
+
+col <- "Gender"
+
+  pourcent_plot <- ggplot(data, aes(x = .data[[col]], fill = Recurred)) +
+    geom_bar(position = "fill", width = 0.7) + #position = "fill" to give them this height
+    scale_y_continuous(labels = scales::percent) + #y axis in pourcent 
+    scale_fill_manual(values = c("No" = "#983399", "Yes" = "#E4CBF9")) +
+    theme_minimal() +    
+    labs(title = paste("Proportion of Recurrence by", col),
+         x = col,
+         y = "Proportion (%)",
+         fill = "Recurred Status") +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+  ggplotly(pourcent_plot)
+```
+
+# 2. Preprocessing
+
+## 2.1. Data Engineering
+
+### 2.1.1. Correlation 
+
+For this project, we will use models that could require variable selection. Therefore we perform correlations tests using the method of Cramer's V with the `rcompanion` package.
+
+```{r cramer matrix}
+
+cat_var_names <- data |> select(-Age) |> names()
+cat_var <- data |> select(-Age) 
+#cat_var <- data |> select(where(is.factor))
+
+#Computation of the matrix
+n <- length(cat_var_names)
+cramer_matrix <- matrix(nrow = n, ncol = n, dimnames = list(cat_var_names, cat_var_names))
+for (i in 1:n) {
+  for (j in 1:n) {
+    #Computation for each couple (i,j) of categorical features
+    cramer_matrix[i, j] <- cramerV(data[[cat_var_names[i]]], data[[cat_var_names[j]]])
+  }
+}
+
+melted_cramer <- melt(cramer_matrix) #Change from a matrix from to a 'long' form in order to be used by ggplot
+
+#Construction of the plot of the matrix 
+cramer_plot <- ggplot(melted_cramer, aes(Var1, Var2, fill = value)) +
+  geom_tile() +
+  geom_text(aes(label = round(value, 2)), color = "black", size = 3) +
+  scale_fill_gradient2(low = "white", high = "#983399", limit = c(0, 1), name = "Cramer's V") + #creation of a radient of colours 
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = "Correlation matrix by Cramer's V",
+       x = "", y = "")
+
+ggplotly(cramer_plot)
+
+```
+
+We then fix a threshold of 0.7 above which we consider two features to be strongly correlated. This allows us to identify three couples of features:
+
+```{r high correlation detection}
+
+CORRELATION_THRESHOLD <- 0.7
+n <- nrow(cramer_matrix)
+
+for (i in 1:(n - 1)) {
+  for (j in (i + 1):n) {
+    
+    val <- cramer_matrix[i, j]
+    if (!is.na(val) && val > CORRELATION_THRESHOLD) {
+      var1 <- rownames(cramer_matrix)[i]
+      var2 <- colnames(cramer_matrix)[j]
+      cat(sprintf("The variables %s and %s are strongly correlated (Cramer's V = %.2f)\n", 
+                  var1, var2, val))
+    }
+  }
+}
+
+```
+
+Response will be removed from the dataset as it creates data leakage. Moreover, either `M` or `Stage` need to be removed as it would create noise in models to which some methods are sensitive. On a medical point of view it is more interesting to keep `M`, `N` and `T` and to let go of \texttt{Stage} in order to avoid multicolinearity. However, even if `Risk` and `Recurred` are strongly correlated, we keep it as it is a feature given by doctors before knowing the result. The correlation especially means that the doctors are doing a good job at estimating the risk of cancer recurrence. Thus, it as it is a very good indicator of the classification of our patients.
+
+### 2.1.2. Duplicate cheking
+
+We identify several lines that are identical, we will consider them corresponding to two patients having the same characteristics as it is highly probable to have such occurrences in real life.
+
+```{r}
+
+nb_dupliactes <- sum(duplicated(data))
+cat("Number of duplicated lines:", nb_dupliactes, "\n")
+
+```
+
+
+### 2.1.3. Missing values
+
+When it comes to missing values, we must decide whether to remove the affected rows or to replace the missing entries with a mean, a median, or another deterministic value. However, this dataset is complete whichi simplifies the consideration.
+Here are two different way of checking, first with a visual plot, then with a function.
+
+
+```{r}
+
+plot_missing(data, group_color = list("Good" = "#E4CBF9", "OK" = "#E6AB02", "Bad" = "#D95F02", "Remove" = "#E41A1C"))
+
+```
+
+```{r}
+
+nb_missing <- sum(is.na(data))
+cat("Number of missing data:", nb_missing, "\n")
+
+```
+
+### 2.1.4. Outliers
+
+As there is only one numerical features, the only possible source of outliers is the feature `Age`.Outliers are extreme observations that deviate from the general pattern of the data, and we use boxplots as it provides a simple way to visualize and detect these unusual values. The next plot presents the boxplot of the feature `Age`. Every observation seems to be located between the whiskers so no significant outliers.
+
+```{r outliers plot}
+
+outlier_plot <- ggplot(data, aes(y = Age, x = "Global")) + 
+  geom_boxplot(width = 0.1, fill = "#E4CBF9", alpha = 0.7, outlier.alpha = 0) +
+  geom_jitter(width = 0.2, size = 1, color = "#983399", alpha = 1) +
+  theme_minimal() +
+  labs(title = "Outlier detection for the feature Age",
+       y = "Age",
+       x = "") 
+
+ggplotly(outlier_plot)
+
+```
+
+To verify this intuition we perform a test with the values of Inter-Quantile Range. It confirms that there are no outliers in the dataset.
+
+```{r outliers test}
+
+Q1 <- quantile(data$Age, 0.25)
+Q3 <- quantile(data$Age, 0.75)
+IQR <- Q3 - Q1
+
+lower_bound <- Q1 - 1.5 * IQR
+upper_bound <- Q3 + 1.5 * IQR
+
+outliers <- data |> filter(Age < lower_bound | Age > upper_bound)
+cat("Number of outliers detected for the feature 'Age':", nrow(outliers))
+
+```
+
+## 2.2. Data sampling
+
+For the previous subsection, we conclude that we will consider two datasets: the complete one (`data`) we will be using for models which do not require variable selection and an other one with variable selection `data_selected`).
+ 
+We sample our dataset with a 80%/20% train/test split using stratification on the target variable as it is unbalanced.
+  
+```{r train-test split}
+
+set.seed(2711)
+
+data_split <- initial_split(data, prop = 0.8, strata = Recurred)
+
+train_data <- training(data_split)
+test_data  <- testing(data_split)
+
+cat("Train set size:", nrow(train_data), "\n")
+cat("Test set size:", nrow(test_data), "\n")
+
+```
+
+We verify that the proportions in the train and test sets are the same.
+
+```{r proportion test}
+
+prop.table(table(train_data$Recurred))
+prop.table(table(test_data$Recurred))
+
+```
+
+We construct the train and test sets for the dataset with variable selection.
+
+```{r train-test-selected}
+
+train_data_selected <- train_data |>
+  select(-Stage, -Response) 
+
+test_data_selected <- test_data |>
+  select(-Stage, -Response) 
+
+```
+
+
+## 2.3. Features engineering
+
+### 2.3.1. One-hot encoding
+
+In the section we create binary features which are the one-hot encoding of every categorical features as they will be useful for the models built in this project. For the features with two modalities, we create a binary version in which one of the modalities is replaced by 1 and the other by 0.
+First we do it on the target variable.
+
+```{r one-hot-encoding target}
+
+train_data_Binary <- train_data |>
+  mutate(Recurred_Binary = ifelse(Recurred == "Yes", 1, 0))
+
+head(train_data_Binary |> select(Recurred, Recurred_Binary), 230)
+```
+
+Then, we do the one-hot-encoding on the other bimodal features. We create a binary version in which one of the modalities is replaced by `1` and the other by `0`.
+
+```{r one-hot-encoding bimodal}
+
+train_data_Binary <- train_data_Binary |>
+  mutate(Gender_Binary = ifelse(Gender == "F", 1, 0)) |> 
+  mutate(Smoking_Binary = ifelse(Smoking == "Yes", 1, 0)) |> 
+  mutate(Hx_Smoking_Binary = ifelse(`Hx Smoking` == "Yes", 1, 0)) |> 
+  mutate(Hx_Radiotherapy_Binary = ifelse(`Hx Radiotherapy` == "Yes", 1, 0)) |> 
+  mutate(Focality_Binary = ifelse(Focality == "Uni-Focal", 1, 0)) |> 
+  mutate(M_Binary = ifelse(M == "M1", 1, 0))
+  
+```
+
+Regarding multi-modal features, we explain the functionning of an example.
+The feature `Risk` has three initial modalities. We create two new binary features `Risk_High_Binary` which is equal to `1` when the observation has a high risk and `0` otherwise, and `Risk_Intermediate_Binary` which is equal to `1` when the observation has an intermediate risk and `0` otherwise. We do not need a feature `Risk_Low_Binary` as this case is represented by both binary risk features being equal to `0`.
+
+```{r one-hot-encoding multi-modal}
+
+train_data_Binary <- train_data_Binary |>
+  #`Thyroid Function`
+  mutate(Thyroid_Function_Euthyroid_Binary = ifelse(`Thyroid Function` == "Euthyroid", 1, 0)) |> 
+  mutate(Thyroid_Function_Clinical_Hyperthyroidism_Binary = ifelse(`Thyroid Function` == "Clinical Hyperthyroidism", 1, 0)) |> 
+  mutate(Thyroid_Function_Clinical_Hypothyroidism_Binary = ifelse(`Thyroid Function` == "Clinical Hypothyroidism", 1, 0)) |>
+  mutate(Thyroid_Function_Subclinical_Hypothyroidism_Binary = ifelse(`Thyroid Function` == "Subclinical Hypothyroidism", 1, 0)) |> 
+  #`Physical Examination`
+  mutate(Physical_Examination_Single_nodular_goiter_left_Binary = ifelse(`Physical Examination` == "Single nodular goiter-left", 1, 0)) |> 
+  mutate(Physical_Examination_Multinodular_goiter_Binary = ifelse(`Physical Examination` == "Multinodular goiter", 1, 0)) |> 
+  mutate(Physical_Examination_Single_nodular_goiter_right_Binary = ifelse(`Physical Examination` == "Single nodular goiter-right", 1, 0)) |> 
+  mutate(Physical_Examination_Normal_Binary = ifelse(`Physical Examination` == "Normal", 1, 0)) |> 
+  #Adenopathy
+  mutate(Adenopathy_No_Binary = ifelse(Adenopathy == "No", 1, 0)) |> 
+  mutate(Adenopathy_Right_Binary = ifelse(Adenopathy == "Right", 1, 0)) |> 
+  mutate(Adenopathy_Left_Binary = ifelse(Adenopathy == "Left", 1, 0)) |> 
+  mutate(Adenopathy_Bilateral_Binary = ifelse(Adenopathy == "Bilateral", 1, 0)) |> 
+  mutate(Adenopathy_Posterior_Binary = ifelse(Adenopathy == "Posterior", 1, 0)) |> 
+  #Pathology
+  mutate(Pathology_Papillary_Binary = ifelse(Pathology == "Papillary", 1, 0)) |> 
+  mutate(Pathology_Micropapillary_Binary = ifelse(Pathology == "Micropapillary", 1, 0)) |> 
+  mutate(Pathology_Follicular_Binary = ifelse(Pathology == "Follicular", 1, 0)) |> 
+  #Risk
+  mutate(Risk_High_Binary = ifelse(Risk == "High", 1, 0)) |> 
+  mutate(Risk_Intermediate_Binary = ifelse(Risk == "Intermediate", 1, 0)) |> 
+  #T
+  mutate(T_T1a_Binary = ifelse(T == "T1a", 1, 0)) |> 
+  mutate(T_T1b_Binary = ifelse(T == "T1b", 1, 0)) |> 
+  mutate(T_T2_Binary = ifelse(T == "T2", 1, 0)) |> 
+  mutate(T_T3a_Binary = ifelse(T == "T3a", 1, 0)) |> 
+  mutate(T_T3b_Binary = ifelse(T == "T3b", 1, 0)) |> 
+  mutate(T_T4a_Binary = ifelse(T == "T4a", 1, 0)) |> 
+  #N
+  mutate(N_N0_Binary = ifelse(N == "N0", 1, 0)) |> 
+  mutate(N_N1a_Binary = ifelse(N == "N1a", 1, 0)) |> 
+  #Stage
+  mutate(Stage_I_Binary = ifelse(Stage == "I", 1, 0)) |> 
+  mutate(Stage_II_Binary = ifelse(Stage == "II", 1, 0)) |> 
+  mutate(Stage_III_Binary = ifelse(Stage == "III", 1, 0)) |> 
+  mutate(Stage_IVA_Binary = ifelse(Stage == "IVA", 1, 0)) |> 
+  #Response
+  mutate(Response_Excellent_Binary = ifelse(Response == "Excellent", 1, 0)) |> 
+  mutate(Response_Indeterminate_Binary = ifelse(Response == "Indeterminate", 1, 0)) |> 
+  mutate(Response_Biochemical_Incomplete_Binary = ifelse(Response == "Biochemical Incomplete", 1, 0)) 
+
+```
+
+Finally, we delete the initial features to keep only the binary ones.
+
+```{r}
+
+train_data_Binary <- train_data_Binary |>
+  select(-Gender, -Smoking, -`Hx Smoking`, -`Hx Radiotherapy`, -`Thyroid Function`, -`Physical Examination`, -Adenopathy, -Pathology, -Focality, -Risk, -T, -N, -M, -Stage, -Response, -Recurred) 
+
+```
+
+Here is an insight of this new train set.
+
+```{r insight train binary}
+
+head(train_data_Binary, 10) |> rmarkdown::paged_table()
+
+```
+
+We need to do the one-hot-encoding for the train set with variable selection. We could do the all process again but here we only need to delete the binary feature corresponding to the feature which were deleted for this set: `Stage` and `Response`. 
+
+```{r one-hot-encoding train selected version}
+train_data_selected_Binary <- train_data_Binary |>
+  select(-Stage_I_Binary, -Stage_II_Binary, -Stage_III_Binary, -Stage_IVA_Binary) |>
+  select(-Response_Excellent_Binary, -Response_Indeterminate_Binary, -Response_Biochemical_Incomplete_Binary)
+
+head(train_data_selected_Binary, 10) |> rmarkdown::paged_table()
+```
+
+We also need to perform one-hot-encoding on the test set. Here, we use the exact same code as for the train set.
+
+```{r one-hot-encoding test}
+test_data_Binary <- test_data |>
+  #TARGET
+  mutate(Recurred_Binary = ifelse(Recurred == "Yes", 1, 0)) |>
+  #BIMODAL
+  mutate(Gender_Binary = ifelse(Gender == "F", 1, 0)) |> 
+  mutate(Smoking_Binary = ifelse(Smoking == "Yes", 1, 0)) |> 
+  mutate(Hx_Smoking_Binary = ifelse(`Hx Smoking` == "Yes", 1, 0)) |> 
+  mutate(Hx_Radiotherapy_Binary = ifelse(`Hx Radiotherapy` == "Yes", 1, 0)) |> 
+  mutate(Focality_Binary = ifelse(Focality == "Uni-Focal", 1, 0)) |> 
+  mutate(M_Binary = ifelse(M == "M1", 1, 0)) |>
+  #MULTIMODAL
+  #`Thyroid Function`
+  mutate(Thyroid_Function_Euthyroid_Binary = ifelse(`Thyroid Function` == "Euthyroid", 1, 0)) |> 
+  mutate(Thyroid_Function_Clinical_Hyperthyroidism_Binary = ifelse(`Thyroid Function` == "Clinical Hyperthyroidism", 1, 0)) |> 
+  mutate(Thyroid_Function_Clinical_Hypothyroidism_Binary = ifelse(`Thyroid Function` == "Clinical Hypothyroidism", 1, 0)) |>
+  mutate(Thyroid_Function_Subclinical_Hypothyroidism_Binary = ifelse(`Thyroid Function` == "Subclinical Hypothyroidism", 1, 0)) |> 
+  #`Physical Examination`
+  mutate(Physical_Examination_Single_nodular_goiter_left_Binary = ifelse(`Physical Examination` == "Single nodular goiter-left", 1, 0)) |> 
+  mutate(Physical_Examination_Multinodular_goiter_Binary = ifelse(`Physical Examination` == "Multinodular goiter", 1, 0)) |> 
+  mutate(Physical_Examination_Single_nodular_goiter_right_Binary = ifelse(`Physical Examination` == "Single nodular goiter-right", 1, 0)) |> 
+  mutate(Physical_Examination_Normal_Binary = ifelse(`Physical Examination` == "Normal", 1, 0)) |> 
+  #Adenopathy
+  mutate(Adenopathy_No_Binary = ifelse(Adenopathy == "No", 1, 0)) |> 
+  mutate(Adenopathy_Right_Binary = ifelse(Adenopathy == "Right", 1, 0)) |> 
+  mutate(Adenopathy_Left_Binary = ifelse(Adenopathy == "Left", 1, 0)) |> 
+  mutate(Adenopathy_Bilateral_Binary = ifelse(Adenopathy == "Bilateral", 1, 0)) |> 
+  mutate(Adenopathy_Posterior_Binary = ifelse(Adenopathy == "Posterior", 1, 0)) |> 
+  #Pathology
+  mutate(Pathology_Papillary_Binary = ifelse(Pathology == "Papillary", 1, 0)) |> 
+  mutate(Pathology_Micropapillary_Binary = ifelse(Pathology == "Micropapillary", 1, 0)) |> 
+  mutate(Pathology_Follicular_Binary = ifelse(Pathology == "Follicular", 1, 0)) |> 
+  #Risk
+  mutate(Risk_High_Binary = ifelse(Risk == "High", 1, 0)) |> 
+  mutate(Risk_Intermediate_Binary = ifelse(Risk == "Intermediate", 1, 0)) |> 
+  #T
+  mutate(T_T1a_Binary = ifelse(T == "T1a", 1, 0)) |> 
+  mutate(T_T1b_Binary = ifelse(T == "T1b", 1, 0)) |> 
+  mutate(T_T2_Binary = ifelse(T == "T2", 1, 0)) |> 
+  mutate(T_T3a_Binary = ifelse(T == "T3a", 1, 0)) |> 
+  mutate(T_T3b_Binary = ifelse(T == "T3b", 1, 0)) |> 
+  mutate(T_T4a_Binary = ifelse(T == "T4a", 1, 0)) |> 
+  #N
+  mutate(N_N0_Binary = ifelse(N == "N0", 1, 0)) |> 
+  mutate(N_N1a_Binary = ifelse(N == "N1a", 1, 0)) |> 
+  #Stage
+  mutate(Stage_I_Binary = ifelse(Stage == "I", 1, 0)) |> 
+  mutate(Stage_II_Binary = ifelse(Stage == "II", 1, 0)) |> 
+  mutate(Stage_III_Binary = ifelse(Stage == "III", 1, 0)) |> 
+  mutate(Stage_IVA_Binary = ifelse(Stage == "IVA", 1, 0)) |> 
+  #Response
+  mutate(Response_Excellent_Binary = ifelse(Response == "Excellent", 1, 0)) |> 
+  mutate(Response_Indeterminate_Binary = ifelse(Response == "Indeterminate", 1, 0)) |> 
+  mutate(Response_Biochemical_Incomplete_Binary = ifelse(Response == "Biochemical Incomplete", 1, 0)) |>
+  #DELETE INITIAL
+  select(-Gender, -Smoking, -`Hx Smoking`, -`Hx Radiotherapy`, -`Thyroid Function`, -`Physical Examination`, -Adenopathy, -Pathology, -Focality, -Risk, -T, -N, -M, -Stage, -Response, -Recurred) 
+
+head(test_data_Binary, 10) |> rmarkdown::paged_table()
+```
+
+```{r one-hot-encoding test selected version}
+
+test_data_selected_Binary <- test_data_Binary |>
+  select(-Stage_I_Binary, -Stage_II_Binary, -Stage_III_Binary, -Stage_IVA_Binary) |>
+  select(-Response_Excellent_Binary, -Response_Indeterminate_Binary, -Response_Biochemical_Incomplete_Binary)
+
+head(test_data_selected_Binary, 10) |> rmarkdown::paged_table()
+```
+
+### 2.3.2. Normalisation of the numerical feature
+
+As every other feature has now values 0 and 1, it is crucial to normalise the feature `Age`, especially for models which will compute distances. We use the `preProcess` function from the package `caret`.
+
+```{r normalisation }
+
+train_data_Binary$Age <- as.numeric(unlist(train_data_Binary$Age))
+test_data_Binary$Age  <- as.numeric(unlist(test_data_Binary$Age))
+
+normalisation_parameters <- caret::preProcess(train_data_Binary[, "Age", drop = FALSE], method = c("center", "scale"))
+
+train_data_Binary$Age <- predict(normalisation_parameters, train_data_Binary[, "Age", drop = FALSE])[[1]]
+test_data_Binary$Age <- predict(normalisation_parameters, test_data_Binary[, "Age", drop = FALSE])[[1]]
+
+train_data_selected_Binary$Age <- predict(normalisation_parameters, train_data_selected_Binary[, "Age", drop = FALSE])[, 1]
+test_data_selected_Binary$Age <- predict(normalisation_parameters, test_data_selected_Binary[, "Age", drop = FALSE])[, 1]
+
+```
+
+# 3. Choice of metrics 
+
+<div>
+  <p>The metrics that are explained in this section separate the observation and their prediction in four classes.</p>
+
+  <ul>
+    <li>A <strong>True-Positive</strong> corresponds to a patient which had cancer recurrence and the model classified it as recurrent.</li>
+    <li>A <strong>True-Negative</strong> corresponds to a patient which did not have cancer recurrence and the model did not classify it as recurrent.</li>
+    <li>A <strong>False-Negative</strong> corresponds to a patient which had cancer recurrence and the model did not classify it as recurrent.</li>
+    <li>A <strong>False-Positive</strong> corresponds to a patient which did not have cancer recurrence and the model did classify it as recurrent.</li>
+  </ul>
+
+  <p>In this precise medical context, a patient with a False-Positive outcome would benefit from enhanced follow-up care, which is generally beneficial. However, they may also receive a more aggressive treatment that could lead to unnecessary side effects, which could be avoided if the patient had been correctly identified.</p>
+
+  <p>On the other side, a patient with a False-Negative would present high risk of cancer recurrence but will not benefit from this extra care which could lead the patient in the worst case scenario to deaf.</p>
+
+  <p>This considerations leads us to choose the following metrics to compare our models:</p>
+
+  <ul>
+    <li>
+      <strong>Accuracy:</strong> the proportion of total predictions (both Positive and Negative) that are correct. It is defined as:
+      $$ \text{Accuracy} = \frac{\text{True-Positive} + \text{True-Negative}}{\text{Total Predictions}} $$
+    </li>
+    <li>
+      <strong>Recall:</strong> the proportion of actual positive cases that are correctly identified. It is defined as:
+      $$ \text{Recall} = \frac{\text{True-Positive}}{\text{True-Positive} + \text{False Negatives}} $$
+    </li>
+    <li>
+      <strong>AUC (Area Under the ROC Curve):</strong> serves as a robust metric for summarizing the performance of a classification model across all possible thresholds. AUC quantifies the model’s overall ability to discriminate between positive and negative classes. AUC values range from 0 to 1, where 0 indicates that all predictions are incorrect, and 1 indicates that all predictions are correct.
+    </li>
+  </ul>
+
+  <p>Since the classes are unbalanced, the accuracy can be misleading due to the under representation of one class. This is why we also compute the AUC, with the goal of achieving the highest possible AUC value which allows us to know if the model has sufficient discriminatory power to make it worth choosing a threshold.</p>
+</div>
+
+
+# 4. Model evaluation 
+
+In this section, we will built three different models. The performance results will be given in the next section.
+
+## 4.1. Model 1: K Nearest Neighbors (KNN)
+
+The first model we will implement uses the method of K Nearest Neighbors. This is an algorithm based on distances that will classify a new observation according to the class of its nearest neighbors. As it computes distances, we will use the binary version of our dataset and the version with variable selection as it is sensitive to noises.
+
+We start by seperating our sets: on one side the target and on the other side the covariates.
+
+```{r knn x and y}
+
+set.seed(2711)
+
+#Division of the target y and the set X
+y_train_KNN <- train_data_selected_Binary$Recurred_Binary
+X_train_KNN <- train_data_selected_Binary |> select(-Recurred_Binary)
+
+y_test_KNN <- test_data_selected_Binary$Recurred_Binary
+X_test_KNN <- test_data_selected_Binary |> select(-Recurred_Binary)
+
+```
+
+Then, we search the optimal value for the parameter K.
+
+```{r optimal K plot}
+
+set.seed(2711)
+
+#Grid of parameters k
+k_values <- seq(1, 20, by = 1) 
+accuracy_k <- c()
+
+for (k in k_values) {
+  pred_temp <- knn(train = X_train_KNN, 
+                   test  = X_test_KNN, 
+                   cl    = y_train_KNN, 
+                   k     = k)
+  #Computation of accuracy
+  acc <- sum(pred_temp == y_test_KNN) / length(y_test_KNN)
+  accuracy_k <- c(accuracy_k, acc)
+}
+
+plot(k_values, accuracy_k, type="b", col="#983399", 
+     xlab="Number of neighbors (K)", ylab="Accuracy",
+     main="Research of the optimal parameter K")
+
+```
+
+We confirm with a test that the optimal K is 15.
+
+```{r optimal K computation}
+
+set.seed(2711)
+
+best_k <- k_values[which.max(accuracy_k)]
+cat("Optimal parameter K:", best_k, "\n")
+
+```
+Now, that we have define K, we can train the model.
+
+```{r knn model}
+
+set.seed(2711)
+
+KNN_model <- knn(train = X_train_KNN, 
+                test  = X_test_KNN, 
+                cl    = y_train_KNN, #class = the target
+                k     = best_k,
+                prob = TRUE)
+
+```
+
+To evaluate our model, we first compute the confusion matrix and plot some general statistics.
+
+```{r knn confusion matrix and stat}
+
+KNN_cms <- caret::confusionMatrix(data = as.factor(KNN_model), 
+                          reference = as.factor(y_test_KNN),
+                          positive = "1") #1 is the Recurred class
+
+print(KNN_cms)
+```
+
+Then we give a visual representation of the confusion matrix.
+
+```{r knn confusion matrix}
+
+confusion_matrix_KNN <- table(factor(KNN_model), factor(y_test_KNN))
+par(mfrow=c(1, 1))
+ctable_KNN <- as.table(confusion_matrix_KNN, 
+                   nrow = 2,
+                   byrow = TRUE)
+rownames(ctable_KNN) <- colnames(ctable_KNN) <- c("Healthy (0)", "Recurrence (1)")
+dimnames(ctable_KNN) <- list(`Real values` = rownames(ctable_KNN), Prediction = colnames(ctable_KNN))
+
+fourfoldplot(ctable_KNN, 
+             color = c("#983399", "#E4CBF9"),
+             conf.level = 0, 
+             margin = 1, 
+             main = "Confusion matrix for the KNN model")
+
+```
+
+With this first model, 68 patients of the test set have been correctly classified, 8 patients are False-Negative (had recurrence but not classified so) and only one patient is False-Positive (no recurrence but classified as recurrent). The accuracy is equal to 0.88 and the recall is equal to 0.64. It indicates good performance in the majority of cases, however as False-Negative could have very dangerous consequences, we will try other models to reduce this number.
+
+Finally, we plot the ROC Curve.
+
+```{r knn roc curve}
+
+#Preparation
+raw_probs_KNN <- attr(KNN_model, "prob") #to have the proba
+prob_positive_KNN <- ifelse(KNN_model == "Yes", raw_probs_KNN, 1 - raw_probs_KNN) #to take the proba when yes ie recurred
+roc_pred_KNN <- prediction(prob_positive_KNN, y_test_KNN) #comparison of predicted and real values
+roc_perf_KNN <- performance(roc_pred_KNN, measure = "tpr", x.measure = "fpr") #computation of the metrics 
+
+#AUC Computation
+auc_perf_KNN <- performance(roc_pred_KNN, measure = "auc")
+auc_value_KNN <- round(slot(auc_perf_KNN, "y.values")[[1]], 3) 
+auc_label_KNN <- paste("ROC curve (AUC =", auc_value_KNN, ")") #to directly add to the figure
+
+#Creation of a nice dataframe
+roc_values_KNN <- data.frame(Threshold = slot(roc_perf_KNN, "alpha.values")[[1]])
+roc_values_KNN$FPR <- slot(roc_perf_KNN, "x.values")[[1]] #fpr on the x axis
+roc_values_KNN$TPR <- slot(roc_perf_KNN, "y.values")[[1]] #tpr on the y axis
+
+roc_values_KNN <- roc_values_KNN[is.finite(roc_values_KNN$Threshold), ] #to have only finite threshold
+
+#Creation of the plot
+plot_ly(data = roc_values_KNN, x = ~FPR) |>
+  add_trace(y = ~TPR, mode = 'lines', name = auc_label_KNN, type = 'scatter', 
+            line = list(color = '#983399', width = 3)) |>
+  add_segments(x = 0, xend = 1, y = 0, yend = 1, 
+               name = 'No skill model', 
+               line = list(dash = "dash", color = 'gray', width = 1), 
+               showlegend = TRUE) |>
+  layout(title = 'ROC Curve (KNN)',
+         xaxis = list(title = "False Positive Rate (1 - Specificity)"),
+         yaxis = list(title = "True Positive Rate (Sensitivity)"),
+         legend = list(title = list(text = '<b> Legend </b>')))
+```
+
+
+## 4.2. Model 2: Logistic Regression with Lasso Regularisation (LR)
+
+The Logistic regression method is a generalisation of linear modelsIn this we also add an L1 penalty, a Lasso regularisation. It will do variable selection by choosing an optimal coefficient for each feature and setting some of them to 0. For this reasons, we us the initial training set. 
+
+Once again, we start by seperating our sets: on one side the target and on the other side the covariates.
+
+```{r lasso x and y}
+
+set.seed(2711)
+
+#Division of the target y and the set X
+y_train_LR <- train_data$Recurred
+X_train_LR <- train_data |> select(-Recurred)
+
+y_test_LR <- test_data$Recurred
+X_test_LR <- test_data |> select(-Recurred)
+
+```
+
+Then, we search the optimal regularisation parameter lambda.
+
+```{r lasso optimal param plot}
+
+set.seed(2711)
+
+grid_Lasso <- seq(0.01, 0.03, length = 100)
+
+custom_LR <- caret::trainControl(method = "cv", 
+                       number = 10, 
+                       classProbs = TRUE, 
+                       summaryFunction = twoClassSummary) #important for the ROC curve
+
+Lasso <- train(Recurred ~ ., data = train_data,
+               method = 'glmnet',
+               tuneGrid = expand.grid(alpha = 1, lambda = grid_Lasso),
+               preProc = c("center", "scale"),
+               metric = "ROC",
+               trControl = custom_LR)
+
+ggplotly(ggplot(Lasso$results, aes(x = lambda, y = ROC)) +
+  geom_line(color = "#983399", size = 1) +  
+  geom_point(color = "#983399", size = 2)+
+  labs(title = "Research of the optimal parameter of Lasso regularisation"))
+
+```
+
+We confirm our choice with the function `bestTune`.
+
+```{r lasso optimal param function}
+Lasso$bestTune
+```
+
+To evaluate our model, we first compute the confusion matrix and plot some general statistics.
+
+```{r lasso cm and stat}
+
+pred_classes_LR <- predict(Lasso, newdata = test_data) #predicted classes for the test set
+
+pred_probs_LR <- predict(Lasso, newdata = test_data, type = "prob") #probabilty of such prediction
+
+lasso_cms <- confusionMatrix(data = pred_classes_LR, 
+                               reference = y_test_LR, 
+                               positive = "Yes")
+
+print(lasso_cms)
+```
+
+Then we give a visual representation of the confusion matrix.
+
+```{r LR confusion matrix}
+
+confusion_matrix_LR <- table(factor(pred_classes_LR), factor(y_test_LR))
+par(mfrow=c(1, 1))
+ctable_LR <- as.table(confusion_matrix_LR, 
+                   nrow = 2,
+                   byrow = TRUE)
+rownames(ctable_LR) <- colnames(ctable_LR) <- c("Healthy (No)", "Recurrence (Yes)")
+dimnames(ctable_LR) <- list(`Real values` = rownames(ctable_LR), Prediction = colnames(ctable_LR))
+
+fourfoldplot(ctable_LR, 
+             color = c("#983399", "#E4CBF9"),
+             conf.level = 0, 
+             margin = 1, 
+             main = "Confusion matrix for the LR model")
+
+```
+
+With this second model, there is no False-Positive and only 4 False-Negative. 73 patients have been correctly identified. The accuracy is 0.95 and the recall 0.81. This model shows better performances than the previous one. Only 6% of the patients have been wrongly classified, which is still considerable for the incurred risk.
+
+Finally, we plot the ROC Curve. It shows very good performances according to the North-West-Rule. 
+
+```{r LR roc curve}
+
+#Preparation 
+lasso_probs_LR <- predict(Lasso, newdata = test_data, type = "prob")
+prob_positive_LR <- lasso_probs_LR$Yes
+roc_pred_LR <- prediction(prob_positive_LR, y_test_LR)
+roc_perf_LR <- performance(roc_pred_LR, measure = "tpr", x.measure = "fpr")
+
+#AUC Computation
+auc_perf_LR <- performance(roc_pred_LR, measure = "auc")
+auc_value_LR <- round(slot(auc_perf_LR, "y.values")[[1]], 3) 
+auc_label_LR <- paste("ROC curve (AUC =", auc_value_LR, ")") 
+
+#Creation of the dataframe
+roc_values_LR <- data.frame(Threshold = slot(roc_perf_LR, "alpha.values")[[1]])
+roc_values_LR$FPR <- slot(roc_perf_LR, "x.values")[[1]]
+roc_values_LR$TPR <- slot(roc_perf_LR, "y.values")[[1]]
+roc_values_LR <- roc_values_LR[is.finite(roc_values_LR$Threshold), ]
+
+#Creation of the plot
+plot_ly(data = roc_values_LR, x = ~FPR) |>
+  add_trace(y = ~TPR, mode = 'lines', name = auc_label_LR, type = 'scatter', 
+            line = list(color = '#983399', width = 3)) |>
+  add_segments(x = 0, xend = 1, y = 0, yend = 1, 
+               name = 'No skill model', 
+               line = list(dash = "dash", color = 'gray', width = 1), 
+               showlegend = TRUE) |>
+  layout(title = 'ROC Curve (LR)',
+         xaxis = list(title = "False Positive Rate (1 - Specificity)"),
+         yaxis = list(title = "True Positive Rate (Sensitivity)"),
+         legend = list(title = list(text = '<b> Legend </b>')))
+```
+
+As this is a glm model, it enables us to interpret the effect of each selected feature on the probability of cancer recurrence. The following code presents the coefficients that remained non null after the L1 regularisation. The other features not listed in this figure are assumed to have negligible impact on the classification.
+
+```{r lasso coef}
+
+#Creation of a dataframe
+coef_matrix <- as.matrix(coef(Lasso$finalModel, s = Lasso$bestTune$lambda))
+coef_df <- data.frame(
+  Variable = rownames(coef_matrix), 
+  Coefficient = coef_matrix[, 1]
+)
+
+#We only keep the ones that are not null
+coef_df <- coef_df[coef_df$Coefficient != 0 & coef_df$Variable != "(Intercept)", ]
+
+coef_df <- coef_df[order(-abs(coef_df$Coefficient)), ] #To order them
+rownames(coef_df) <- NULL
+
+print(coef_df) |> rmarkdown::paged_table()
+
+```
+As conjectured in the Preproceesing section, the feature `Response` is the most significant feature. An `Excellent` or `Intermediate Response` reduces the risk of recurrence as the coefficient are both negative, whereas the `Structural Incomplete Response` increases the risk as the coefficient is positive. The same way we can observe the impact of the other mentioned features.
+
+Here is an another visualisation of the coefficients.
+
+```{r asso coef fig, fig.width=8, fig.height=8}
+# Calcule l'importance (de 0 à 100)
+importance <- varImp(Lasso, scale = TRUE)
+
+# Affiche le graphique
+plot(importance, main = "Importance des variables (Lasso)")
+```
+
+## 4.3. Model 3: Random Forest (RF)
+
+This last method, the Random Forest, is a bagging method which train several decision trees on independent sub-datasets. The final classification is the class which has the majority among the decision trees. This method requires neither variable selection nor one-hot encoding.
+
+We start by seperating our sets: on one side the target and on the other side the covariates.
+
+```{r rf x and y}
+
+set.seed(2711)
+
+#Division of he target y and the set x
+y_train_RF <- train_data$Recurred
+X_train_RF <- train_data |> select(-Recurred)
+
+y_test_RF <- test_data$Recurred
+X_test_RF <- test_data |> select(-Recurred)
+
+```
+
+Then, we search the optimal parameter for the number of features tested at each node. We test values around 4, that is the square of the number of covariates.
+
+```{r rf optimal param plot}
+
+set.seed(2711)
+
+grid_RF <- expand.grid(mtry = c(2, 3, 4, 5, 6))
+
+custom_RF <- caret::trainControl(method = "cv", 
+                       number = 10, 
+                       classProbs = TRUE, 
+                       summaryFunction = twoClassSummary) #same as LR
+
+RF_model <- train(Recurred ~ ., 
+                  data = train_data,
+                  method = "rf", #call the randomForest package
+                  metric = "ROC",
+                  tuneGrid = grid_RF,
+                  trControl = custom_RF,
+                  ntree = 500) #standard choice
+
+ggplotly(ggplot(RF_model)+
+  geom_line(color = "#983399", size = 1) +  
+  geom_point(color = "#983399", size = 2)+
+  labs(title = "Research of the optimal parameter of the RF method"))
+
+```
+
+```{r rf optimal param function}
+RF_model$bestTune
+```
+
+We observe an optimal parameter of 5. It is confirmed by the `bestTune` function. By default the `caret` package automatically select this parameter for the model and the rest of this study.
+
+To evaluate our model, we first compute the confusion matrix and plot some general statistics.
+
+```{r rf confusion matrix and stat}
+
+pred_classes_RF <- predict(RF_model, newdata = test_data) #predicted classes for the test set
+
+RF_cms <- confusionMatrix(data = pred_classes_RF, 
+                               reference = y_test_RF, 
+                               positive = "Yes")
+
+print(RF_cms)
+```
+
+Then we give a visual representation of the confusion matrix.
+
+```{r rf confusion matrix bis}
+
+confusion_matrix_RF <- table(factor(pred_classes_RF), factor(y_test_RF))
+par(mfrow=c(1, 1))
+ctable_RF <- as.table(confusion_matrix_RF, 
+                   nrow = 2,
+                   byrow = TRUE)
+rownames(ctable_RF) <- colnames(ctable_RF) <- c("Healthy (No)", "Recurrence (Yes)")
+dimnames(ctable_RF) <- list(`Real values` = rownames(ctable_RF), Prediction = colnames(ctable_RF))
+
+fourfoldplot(ctable_RF, 
+             color = c("#983399", "#E4CBF9"),
+             conf.level = 0, 
+             margin = 1, 
+             main = "Confusion matrix for the RF model")
+
+```
+
+This last model shows better performances than the two others in the confusion matrix. Only three patients were misclassified: 1 False-Positive and 2 False-Negative. The accuracy is 0.96 and the recall 0.91. The ROC curve also shows great performances according to the North-West-Rule and an AUC of 0.99. 
+
+```{r rf roc curve}
+
+#Preparation 
+lasso_probs_RF <- predict(RF_model, newdata = test_data, type = "prob")
+prob_positive_RF <- lasso_probs_RF$Yes
+roc_pred_RF <- prediction(prob_positive_RF, y_test_RF)
+roc_perf_RF <- performance(roc_pred_RF, measure = "tpr", x.measure = "fpr")
+
+#AUC Computation
+auc_perf_RF <- performance(roc_pred_RF, measure = "auc")
+auc_value_RF <- round(slot(auc_perf_RF, "y.values")[[1]], 3) 
+auc_label_RF <- paste("ROC curve (AUC =", auc_value_RF, ")") 
+
+#Creation of the dataframe
+roc_values_RF <- data.frame(Threshold = slot(roc_perf_RF, "alpha.values")[[1]])
+roc_values_RF$FPR <- slot(roc_perf_RF, "x.values")[[1]]
+roc_values_RF$TPR <- slot(roc_perf_RF, "y.values")[[1]]
+roc_values_RF <- roc_values_RF[is.finite(roc_values_RF$Threshold), ]
+
+#Creation of the plot
+plot_ly(data = roc_values_RF, x = ~FPR) |>
+  add_trace(y = ~TPR, mode = 'lines', name = auc_label_RF, type = 'scatter', 
+            line = list(color = '#983399', width = 3)) |>
+  add_segments(x = 0, xend = 1, y = 0, yend = 1, 
+               name = 'No skill model', 
+               line = list(dash = "dash", color = 'gray', width = 1), 
+               showlegend = TRUE) |>
+  layout(title = 'ROC Curve (RF)',
+         xaxis = list(title = "False Positive Rate (1 - Specificity)"),
+         yaxis = list(title = "True Positive Rate (Sensitivity)"),
+         legend = list(title = list(text = '<b> Legend </b>')))
+```
+
+# 5. Performance comparison 
+
+The performance metrics of the three implemented models have been summarised in the following table. The Accuracy and the Recall are maximal for the RF model, and the AUC is optimal for the LR with Lasso regularisation.
+
+```{r df results}
+
+results_df <- data.frame(
+  Model = c("KNN_model", "Lasso", "RF_model"),
+  Accuracy = c(KNN_cms$overall["Accuracy"],
+               lasso_cms$overall["Accuracy"],
+               RF_cms$overall["Accuracy"]),
+  Recall = c(KNN_cms$byClass["Sensitivity"],
+             lasso_cms$byClass["Sensitivity"],
+             RF_cms$byClass["Sensitivity"]),
+  AUC = c(auc_value_KNN, auc_value_LR, auc_value_RF)
+)
+results_df[, 2:4] <- round(results_df[, 2:4], 3)
+
+print(results_df) |> rmarkdown::paged_table()
+
+```
+
+# 6. Conclusion
+
+Throughout this project, we developed three supervised learning models to predict the recurrence of thyroid cancer based on clinical and pathological features. We focused on three key performance metrics: Accuracy, Recall and AUC.
+
+
+The Random Forest showed best performances for two of the three metrics. It still has a very good performance for the AUC with a value of 0.987.
+The Logistic Regression with Lasso Regularisation also performed very well on the three metrics with an optimal AUC.
+The K-Nearest Neighbors had the weakest results, especially for a Recall of 0.636 which was presented as a very important metric in this clinical setting.
+All values are presented in the previous table.
+
+
+The Random Forest and the Logistic Regression both show very strong performances. Even if the Random Forest slightly outperforms the Logistic Regression, the choice will be made to select the Logistic Regression as it enables medical expert to understand the role of each factor in the final decision of the model. Indeed as the Random Forest is a black box, it is more complicated to understand how the model performs. Whereas the Logistic Regression is efficient, transparent and understandable which are qualities that are appreciated in a clinical environment.
+
+
+One limitation of this dataset was that some modalities of some categorical feature did not have any values which limits the role of such modalities in the classification. It will be especially limiting if a new patient classify so as the model will not be able to use this information.
+
+
+Finally, in order to help the medical team in there detection, a web-based application was developed in R shiny. This interface acts as a decision support tool, estimating the probability of recurrence based on our Lasso Logistic Regression model. It provides clinicians with an immediate risk assessment using the patient's specific parameters. The tool is available at the following link:
+
+https://axellemeric.shinyapps.io/axelle_meric/
+
+
+
+# References
+
+<div>
+  
+  <p style="margin-bottom: 10px;">
+    [1] Google. Use of Generative AI to help with bug in the code and to implement an R shiny app, however always under supervision and has been entirely mastered.
+  </p>
+
+  <p style="margin-bottom: 10px;">
+    [2] Kaggle. <em>Kaggle. Kaggle page dedicated to the dataset, however no project done in R.</em> URL: 
+    <a href="https://www.kaggle.com/datasets/joebeachcapital/differentiated-thyroid-cancer-recurrence/code?datasetId=4324904&language=Python&outputs=Visualization" target="_blank">https://www.kaggle.com/datasets/joebeachcapital/differentiated-thyroid-cancer-recurrence...</a>
+  </p>
+
+  <p style="margin-bottom: 10px;">
+    [3] Katia Meziani. <em>Regression and Classification methods Course Notes.</em> Course material from Université Dauphine-PSL / M2 ISF. Lecture notes used in the Regression and Classification methods course. Academic Year 2025-2026.
+  </p>
+
+  <p style="margin-bottom: 10px;">
+    [4] RDocumentation. URL: <a href="https://www.rdocumentation.org/" target="_blank">https://www.rdocumentation.org/</a>.
+  </p>
+
+  <p style="margin-bottom: 10px;">
+    [5] Aidin Tarokhian, Shiva Borzooei. <em>Differentiated Thyroid Cancer Recurrence.</em> 2023. DOI: 10.24432/C5632J. URL: <a href="https://archive.ics.uci.edu/dataset/915" target="_blank">https://archive.ics.uci.edu/dataset/915</a>.
+  </p>
+
+  <p style="margin-bottom: 10px;">
+    [6] <em>Thyroid Cancer Recurrence Project of M1 Statistical learning class, Python code.ipynb at main · AxelleMeric/Thyroid-Cancer-Recurrence_Data-Visualisation.</em> en. URL: 
+    <a href="https://github.com/AxelleMeric/Thyroid-Cancer-Recurrence_Data-Visualisation/blob/main/Python%20code.ipynb" target="_blank">https://github.com/AxelleMeric/Thyroid-Cancer-Recurrence_Data-Visualisation/blob/main/Python%20code.ipynb</a>.
+  </p>
+
+  <p style="margin-bottom: 10px;">
+    [7] <em>Thyroid Cancer Recurrence Project of M1 Statistical learning class, Report of Python code at main · AxelleMeric/Thyroid-Cancer-Recurrence_Data-Visualisation.</em> en. URL: 
+    <a href="https://github.com/AxelleMeric/Thyroid-Cancer-Recurrence_Data-Visualisation/blob/main/Project%20Report%20in%20Python.pdf" target="_blank">https://github.com/AxelleMeric/Thyroid-Cancer-Recurrence_Data-Visualisation/blob/main/Project%20Report%20in%20Python.pdf</a>.
+  </p>
+</div>
