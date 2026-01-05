@@ -1315,7 +1315,7 @@ coef_df <- coef_df[coef_df$Coefficient != 0 & coef_df$Variable != "(Intercept)",
 coef_df <- coef_df[order(-abs(coef_df$Coefficient)), ] #To order them
 rownames(coef_df) <- NULL
 
-print(coef_df) |> rmarkdown::paged_table()
+coef_df |> rmarkdown::paged_table()
 
 ```
 As conjectured in the Preproceesing section, the feature `Response` is the most significant feature. An `Excellent` or `Intermediate Response` reduces the risk of recurrence as the coefficient are both negative, whereas the `Structural Incomplete Response` increases the risk as the coefficient is positive. The same way we can observe the impact of the other mentioned features.
@@ -1372,8 +1372,11 @@ RF_model <- train(Recurred ~ .,
 
 ggplotly(ggplot(RF_model)+
   geom_line(color = "#983399", size = 1) +  
-  geom_point(color = "#983399", size = 2)+
-  labs(title = "Research of the optimal parameter of the RF method"))
+  geom_point(color = "#983399", size = 2)) |>
+  layout(title = "Research of the optimal parameter of the RF method",
+         xaxis = list(title = "Number of features tested at each node"),
+         yaxis = list(title = "ROC"),
+         legend = list(title = list(text = '<b> Legend </b>')))
 
 ```
 
@@ -1469,7 +1472,7 @@ results_df <- data.frame(
 )
 results_df[, 2:4] <- round(results_df[, 2:4], 3)
 
-print(results_df) |> rmarkdown::paged_table()
+results_df |> rmarkdown::paged_table()
 
 ```
 
@@ -1494,7 +1497,9 @@ Finally, in order to help the medical team in there detection, a web-based appli
 
 https://axellemeric.shinyapps.io/axelle_meric/
 
+The complete code of this project and the R shiny application can be found on the following GitHub repository:
 
+https://github.com/AxelleMeric/Thyroid-Cancer-Recurrence_Data-Visualisation
 
 # References
 
