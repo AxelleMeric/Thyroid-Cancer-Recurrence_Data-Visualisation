@@ -91,9 +91,10 @@ cat("Columns:", ncol(data), "\n")
 
 There is exactly one continuous feature, which is `Age`. The 15 other features are categorical ones. The target variable is `Recurred`, which indicates whether or not the cancer recurred for each patient. The problem can be formulated as a supervised binary classification task, where the goal is to predict the recurrence of thyroid cancer using a set of clinical and pathological features.
 
-```{r Features}
+```{r Features, fig.width=14}
 
-skimr::skim(data)  |> rmarkdown::paged_table()
+knitr::kable(skimr::skim(data))
+# skimr::skim(data)  |> rmarkdown::paged_table()
 
 ```
 
@@ -121,7 +122,8 @@ data <- data |>
          Recurred = as.factor(Recurred)
   ) 
 
-head(data, 10) |> rmarkdown::paged_table()
+knitr::kable(head(data, 10))
+#|> rmarkdown::paged_table()
 
 ```
 
@@ -892,7 +894,8 @@ Here is an insight of this new train set.
 
 ```{r insight train binary}
 
-head(train_data_Binary, 10) |> rmarkdown::paged_table()
+knitr::kable(head(train_data_Binary, 10))
+# |> rmarkdown::paged_table()
 
 ```
 
@@ -903,7 +906,8 @@ train_data_selected_Binary <- train_data_Binary |>
   select(-Stage_I_Binary, -Stage_II_Binary, -Stage_III_Binary, -Stage_IVA_Binary) |>
   select(-Response_Excellent_Binary, -Response_Indeterminate_Binary, -Response_Biochemical_Incomplete_Binary)
 
-head(train_data_selected_Binary, 10) |> rmarkdown::paged_table()
+knitr::kable(head(train_data_selected_Binary, 10))
+# |> rmarkdown::paged_table()
 ```
 
 We also need to perform one-hot-encoding on the test set. Here, we use the exact same code as for the train set.
@@ -965,7 +969,8 @@ test_data_Binary <- test_data |>
   #DELETE INITIAL
   select(-Gender, -Smoking, -`Hx Smoking`, -`Hx Radiotherapy`, -`Thyroid Function`, -`Physical Examination`, -Adenopathy, -Pathology, -Focality, -Risk, -T, -N, -M, -Stage, -Response, -Recurred) 
 
-head(test_data_Binary, 10) |> rmarkdown::paged_table()
+knitr::kable(head(test_data_Binary, 10))
+# |> rmarkdown::paged_table()
 ```
 
 ```{r one-hot-encoding test selected version}
@@ -974,7 +979,8 @@ test_data_selected_Binary <- test_data_Binary |>
   select(-Stage_I_Binary, -Stage_II_Binary, -Stage_III_Binary, -Stage_IVA_Binary) |>
   select(-Response_Excellent_Binary, -Response_Indeterminate_Binary, -Response_Biochemical_Incomplete_Binary)
 
-head(test_data_selected_Binary, 10) |> rmarkdown::paged_table()
+knitr::kable(head(test_data_selected_Binary, 10))
+# |> rmarkdown::paged_table()
 ```
 
 ### 2.3.2. Normalisation of the numerical feature
@@ -1316,7 +1322,8 @@ coef_df <- coef_df[coef_df$Coefficient != 0 & coef_df$Variable != "(Intercept)",
 coef_df <- coef_df[order(-abs(coef_df$Coefficient)), ] #To order them
 rownames(coef_df) <- NULL
 
-print(coef_df) |> rmarkdown::paged_table()
+knitr::kable(coef_df)
+#coef_df |> rmarkdown::paged_table()
 
 ```
 As conjectured in the Preproceesing section, the feature `Response` is the most significant feature. An `Excellent` or `Intermediate Response` reduces the risk of recurrence as the coefficient are both negative, whereas the `Structural Incomplete Response` increases the risk as the coefficient is positive. The same way we can observe the impact of the other mentioned features.
@@ -1373,8 +1380,12 @@ RF_model <- train(Recurred ~ .,
 
 ggplotly(ggplot(RF_model)+
   geom_line(color = "#983399", size = 1) +  
-  geom_point(color = "#983399", size = 2)+
-  labs(title = "Research of the optimal parameter of the RF method"))
+  geom_point(color = "#983399", size = 2))  |>
+  layout(title = "Research of the optimal parameter of the RF method",
+         xaxis = list(title = "Number of features tested at each node"),
+         yaxis = list(title = "ROC"),
+         legend = list(title = list(text = '<b> Legend </b>')))
+    
 
 ```
 
@@ -1470,7 +1481,8 @@ results_df <- data.frame(
 )
 results_df[, 2:4] <- round(results_df[, 2:4], 3)
 
-print(results_df) |> rmarkdown::paged_table()
+knitr::kable(results_df)
+#results_df |> rmarkdown::paged_table()
 
 ```
 
@@ -1500,6 +1512,10 @@ shiny::shinyAppFile("app.R")
 ```
 
 It is also available online with the link: https://axellemeric.shinyapps.io/axelle_meric/
+
+The complete code of this project and the R shiny application can be found on the following GitHub repository:
+
+https://github.com/AxelleMeric/Thyroid-Cancer-Recurrence_Data-Visualisation
 
 # References
 
